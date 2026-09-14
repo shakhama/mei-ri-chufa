@@ -61,9 +61,15 @@ def commit_if_changed(message):
 
 
 def git_via_proxy(*args):
-    """用代理执行一次 git 命令（仅对该命令生效，不写全局配置）。"""
+    """用代理执行一次 git 命令（仅对该命令生效，不写全局配置）。
+
+    注意必须同时带 `-c http.sslBackend=openssl`：本机 Git for Windows 默认后端是
+    schannel，走 HTTP 代理时 TLS 握手会失败（SSL/TLS connection failed），
+    换成 openssl 后端后代理推送才稳定。
+    """
     proxy = git_proxy()
     return run(["git",
+                "-c", "http.sslBackend=openssl",
                 "-c", "http.proxy=%s" % proxy,
                 "-c", "https.proxy=%s" % proxy] + list(args))
 
