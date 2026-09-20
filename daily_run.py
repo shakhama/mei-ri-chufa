@@ -40,14 +40,18 @@ def git_proxy():
     return (os.environ.get("GIT_PROXY") or DEFAULT_PROXY).strip()
 
 
-def run(cmd):
-    p = subprocess.run(cmd, cwd=HERE, capture_output=True, text=True,
-                       encoding="utf-8", errors="replace")
+def run(cmd, timeout=None):
+    try:
+        p = subprocess.run(cmd, cwd=HERE, capture_output=True, text=True,
+                           encoding="utf-8", errors="replace", timeout=timeout)
+    except subprocess.TimeoutExpired:
+        # 超时绝不无限等待：返回明确的超时结果，交给上层走下一路重试
+        return 124, "", "命令超时（%ss）：%s" % (timeout, " ".join(cmd[:6]))
     return p.returncode, (p.stdout or "").strip(), (p.stderr or "").strip()
 
 
-def git(*args):
-    return run(["git"] + list(args))
+def git(*args, **kw):
+    return run(["git"] + list(args), **kw)
 
 
 def commit_if_changed(message):
@@ -60,7 +64,20 @@ def commit_if_changed(message):
     return out or err
 
 
-def git_via_proxy(*args):
+# 凭据链修正（2026-09-20 定位）：
+# 本仓库继承了全局 credential.helper=helper-selector，该选择器在非交互环境
+# （定时任务 / 自动化会话）里取不到凭据时会挂起等待终端输入，导致 push 永久卡死、
+# 且**不报错**——表现为"生成与提交都成功、站点却停在旧版本"。
+# 解决：先用 `-c credential.helper=` 清空 helper 列表（gitcredentials 规定空值即清空），
+# 再指定 `manager`（Windows 凭据管理器，存有 git:https://github.com 的有效凭据）。
+# 顺序不可颠倒，否则 helper-selector 仍在链上并继续卡死。
+CRED_FIX = ["-c", "credential.helper=", "-c", "credential.helper=manager"]
+
+# push 单路最长等待秒数。宁可失败报错，也不要无限挂起。
+PUSH_TIMEOUT = 70
+
+
+def git_via_proxy(*args, **kw):
     """用代理执行一次 git 命令（仅对该命令生效，不写全局配置）。
 
     注意必须同时带 `-c http.sslBackend=openssl`：本机 Git for Windows 默认后端是
@@ -68,10 +85,11 @@ def git_via_proxy(*args):
     换成 openssl 后端后代理推送才稳定。
     """
     proxy = git_proxy()
-    return run(["git",
-                "-c", "http.sslBackend=openssl",
-                "-c", "http.proxy=%s" % proxy,
-                "-c", "https.proxy=%s" % proxy] + list(args))
+    cmd = ["git",
+           "-c", "http.sslBackend=openssl",
+           "-c", "http.proxy=%s" % proxy,
+           "-c", "https.proxy=%s" % proxy] + CRED_FIX + list(args)
+    return run(cmd, **kw)
 
 
 def push_if_remote():
@@ -84,20 +102,27 @@ def push_if_remote():
     if rrc != 0:
         return "尚未配置 GitHub 远端，仅本地提交。配置：`git remote add origin <仓库地址>`"
 
-    prc, pout, perr = git("push")
+    attempts = []
+    proxy = git_proxy()
+
+    # 1) 直连（修正凭据链后，这是最快也最常见成功的路径）
+    prc, pout, perr = run(["git"] + CRED_FIX + ["push", "origin", "main"],
+                          timeout=PUSH_TIMEOUT)
     if prc == 0:
         return "已推送到 GitHub：%s" % remote
+    attempts.append("直连：%s" % (perr or pout or ("超时 %ss" % PUSH_TIMEOUT)))
 
-    proxy = git_proxy()
+    # 2) 代理重试
     if proxy.lower() == "none":
-        return "推送失败（已关闭代理重试）：%s" % (perr or pout)
+        return "推送失败（已关闭代理重试）：%s" % "；".join(attempts)
 
-    rrc2, pout2, perr2 = git_via_proxy("push")
+    rrc2, pout2, perr2 = git_via_proxy("push", "origin", "main",
+                                       timeout=PUSH_TIMEOUT)
     if rrc2 == 0:
         return ("直连推送失败，已通过代理 %s 重试成功：%s"
                 % (proxy, remote))
-    return ("推送失败（直连与代理 %s 均失败）：%s"
-            % (proxy, (perr2 or pout2) or (perr or pout)))
+    attempts.append("代理 %s：%s" % (proxy, perr2 or pout2 or ("超时 %ss" % PUSH_TIMEOUT)))
+    return "推送失败（直连与代理均失败）：%s" % "；".join(attempts)
 
 
 def main():
