@@ -26,6 +26,17 @@ import sys
 import subprocess
 import datetime
 
+# Windows 控制台默认编码是 GBK/cp936，子进程（generate.py 等）输出的中文
+# 会被按 cp936 编码，若上层按 utf-8 解码就整篇变成 U+FFFD 乱码，
+# 且 print 到 GBK 控制台时遇到无法编码的字符会直接抛 UnicodeEncodeError 中断。
+# 这里做两层修正：本进程 stdout/stderr 强制 utf-8；子进程继承 PYTHONIOENCODING=utf-8。
+for _stream in (sys.stdout, sys.stderr):
+    try:
+        _stream.reconfigure(encoding="utf-8", errors="replace")
+    except Exception:
+        pass
+os.environ.setdefault("PYTHONIOENCODING", "utf-8")
+
 HERE = os.path.dirname(os.path.abspath(__file__))
 GEN = os.path.join(HERE, "generate.py")
 REPORTS = os.path.join(HERE, "reports")
