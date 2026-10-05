@@ -26,6 +26,7 @@ import json
 import os
 import sys
 import html
+import shutil
 import argparse
 import datetime
 import urllib.request
@@ -53,6 +54,21 @@ def today():
 
 def esc(s):
     return html.escape(str(s), quote=True)
+
+
+def render_images(imgs):
+    """渲染正文配图。imgs = [{src, alt, caption}]，可选字段，旧文章不受影响。"""
+    out = []
+    for im in imgs or []:
+        src = im.get("src")
+        if not src:
+            continue
+        cap = im.get("caption", "")
+        out.append(
+            "<figure class='figure'><img src='%s' alt='%s' loading='lazy'>%s</figure>" % (
+                esc(src), esc(im.get("alt", "")),
+                "<figcaption>%s</figcaption>" % esc(cap) if cap else ""))
+    return "\n".join(out)
 
 
 # ---------------------------------------------------------------------------
@@ -103,9 +119,11 @@ def render_article(topic, site, related):
     parts.append("<div class='meta'>发布于 %s · 关键词：%s</div>" % (esc(date), esc("、".join(kw))))
     if desc:
         parts.append("<p><strong>%s</strong></p>" % esc(desc))
+    parts.append(render_images(topic.get("images")))
 
     for sec in topic.get("sections", []):
         parts.append("<h2>%s</h2>" % esc(sec.get("h2", "")))
+        parts.append(render_images(sec.get("images")))
         body = sec.get("body")
         if not body:
             body = ai_expand(sec.get("h2", ""), sec.get("bullets", []))
@@ -227,6 +245,14 @@ def build_robots(site):
 def build_all(data):
     os.makedirs(OUT, exist_ok=True)
     site = data["site"]
+    # 复制静态资源（正文配图等）；无 assets 目录时静默跳过，旧文章不受影响
+    assets = os.path.join(HERE, "assets")
+    if os.path.isdir(assets):
+        dst = os.path.join(OUT, "assets")
+        if os.path.isdir(dst):
+            shutil.rmtree(dst)
+        shutil.copytree(assets, dst)
+        print("  复制资源: assets/")
     published = [t for t in data["topics"] if t.get("publish_date")]
     for t in published:
         related = [x for x in published if x["slug"] != t["slug"]][:3]
