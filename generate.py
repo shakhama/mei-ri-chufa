@@ -187,6 +187,27 @@ def render_article(topic, site, related):
     return page
 
 
+def pick_related(topic, published, n=3):
+    """
+    相关阅读：按关键词交集打分，交集多的优先；同分按发布日期新的优先；
+    交集全为 0 时自然退化为「按发布日期取最新」。
+
+    ⚠️ 旧实现是 [x for x in published if ...][:3]，published 是 topics.json 的原始顺序，
+    导致全站 27 篇的内链都指向最靠前的同一批文章（2026-10-08 修）。
+    """
+    kws = set(topic.get("keywords", []) or [])
+    items = []
+    for x in published:
+        if x["slug"] == topic["slug"]:
+            continue
+        overlap = len(kws & set(x.get("keywords", []) or []))
+        items.append((overlap, x.get("publish_date") or "", x))
+    # 稳定排序两趟：先按发布日期降序（新的在前），再按关键词交集降序
+    items.sort(key=lambda r: r[1], reverse=True)
+    items.sort(key=lambda r: r[0], reverse=True)
+    return [r[2] for r in items[:n]]
+
+
 def build_index(site, published):
     with open(TPL, "r", encoding="utf-8") as f:
         tpl = f.read()
@@ -255,7 +276,7 @@ def build_all(data):
         print("  复制资源: assets/")
     published = [t for t in data["topics"] if t.get("publish_date")]
     for t in published:
-        related = [x for x in published if x["slug"] != t["slug"]][:3]
+        related = pick_related(t, published)
         html_doc = render_article(t, site, related)
         with open(os.path.join(OUT, t["slug"] + ".html"), "w", encoding="utf-8") as f:
             f.write(html_doc)
