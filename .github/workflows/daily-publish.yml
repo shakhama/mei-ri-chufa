@@ -1,0 +1,64 @@
+name: Daily Publish
+
+# 北京 06:50 触发（UTC 22:50）。GitHub 的 schedule 在整点高峰期常延迟 15~45 分钟，
+# 故不设整点，留 10 分钟余量以保证落在 07:00 附近。
+# 本工作流跑在 GitHub 服务器上，与本机开关机 / WorkBuddy 客户端是否在线完全无关。
+on:
+  schedule:
+    - cron: '50 22 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: daily-publish
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    env:
+      # runner 默认是 UTC，generate.py 用 date.today() 写 publish_date，
+      # 不设 TZ 会把北京当天的文章标成前一天。
+      TZ: Asia/Shanghai
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: 幂等检查 - 今天是否已发布
+        id: guard
+        run: |
+          TODAY=$(date +%F)
+          if git log --oneline -1 --grep="chore: daily publish $TODAY" | grep -q .; then
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+            echo "今天($TODAY)已发布过，跳过（幂等）"
+          else
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+            echo "今天($TODAY)尚未发布，继续"
+          fi
+
+      - name: 发布下一篇并重建全站
+        if: steps.guard.outputs.skip == 'false'
+        run: |
+          python generate.py next
+          python generate.py build
+
+      - name: 提交并推送
+        if: steps.guard.outputs.skip == 'false'
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add -A
+          if git diff --cached --quiet; then
+            echo "无内容变更（可能是选题已耗尽），跳过提交"
+            exit 0
+          fi
+          git commit -m "chore: daily publish $(date +%F)"
+          # 期间若有人（本机流水线）推过，先 rebase 再推，避免 non-fast-forward 被拒
+          git pull --rebase origin main
+          git push origin main
+          echo "已推送：chore: daily publish $(date +%F)"

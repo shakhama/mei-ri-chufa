@@ -11,7 +11,11 @@
   5. 生成本次运行的报告并提交
 
 用法：
-    python daily_run.py
+    python daily_run.py                  # 发布下一篇 + 构建 + 提交 + 推送 + 日报
+    python daily_run.py --no-publish     # 只构建 + 日报，不发布新文章
+                                         # （当日已由 GitHub Actions 的 daily-publish
+                                         #   工作流发布时，本机用它补日报与知乎稿，
+                                         #   避免一天发两篇）
 
 网络说明：
     本机直连 GitHub 常被重置，脚本会先直连推送，失败后自动改用代理重试。
@@ -23,6 +27,7 @@
 
 import os
 import sys
+import argparse
 import subprocess
 import datetime
 
@@ -136,12 +141,46 @@ def push_if_remote():
     return "推送失败（直连与代理均失败）：%s" % "；".join(attempts)
 
 
+def pull_latest():
+    """开工前先把远端最新提交拉下来。
+
+    GitHub Actions 的 daily-publish 工作流每天 06:50 会自行 push 一次，
+    本机再按旧基线提交就会被 non-fast-forward 拒绝。所以每次开跑先 rebase。
+    同样走「直连 → 代理」两路，并用 CRED_FIX 修凭据链（否则会静默卡死）。
+    """
+    proxy = git_proxy()
+    prc, pout, perr = run(["git"] + CRED_FIX + ["pull", "--rebase", "origin", "main"],
+                          timeout=PUSH_TIMEOUT)
+    if prc == 0:
+        return "已同步远端最新提交：%s" % (pout or "(已是最新)")
+    attempts = ["直连：%s" % (perr or pout or "超时")]
+    if proxy.lower() == "none":
+        return "同步远端失败（已关闭代理重试）：%s" % "；".join(attempts)
+    rrc, rout, rerr = git_via_proxy("pull", "--rebase", "origin", "main",
+                                    timeout=PUSH_TIMEOUT)
+    if rrc == 0:
+        return "直连同步失败，已通过代理 %s 重试成功" % proxy
+    attempts.append("代理 %s：%s" % (proxy, rerr or rout or "超时"))
+    return "同步远端失败（直连与代理均失败，将按本地基线继续）：%s" % "；".join(attempts)
+
+
 def main():
     today = datetime.date.today().isoformat()
 
+    ap = argparse.ArgumentParser(description="每日内容站流水线")
+    ap.add_argument("--no-publish", action="store_true",
+                    help="跳过发布新文章，只重建站点并出日报")
+    args = ap.parse_args()
+
+    # 0. 先同步远端（GitHub Actions 每天早上会自己发一篇并 push）
+    sync0 = pull_latest()
+
     # 1. 发布下一篇
-    _, out, err = run([PY, GEN, "next"])
-    publish = out or err or "(无输出)"
+    if args.no_publish:
+        publish = "跳过发布：本日文章已由 GitHub Actions 的 daily-publish 工作流发布（--no-publish）。"
+    else:
+        _, out, err = run([PY, GEN, "next"])
+        publish = out or err or "(无输出)"
 
     # 2. 构建全站
     _, out, err = run([PY, GEN, "build"])
@@ -158,6 +197,9 @@ def main():
     report_path = os.path.join(REPORTS, today + ".md")
     report = "\n".join([
         "# 每日构建报告 %s" % today,
+        "",
+        "## 0. 同步远端",
+        sync0,
         "",
         "## 1. 发布",
         publish,
