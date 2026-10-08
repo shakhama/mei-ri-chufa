@@ -23,9 +23,13 @@ jobs:
       # 不设 TZ 会把北京当天的文章标成前一天。
       TZ: Asia/Shanghai
     steps:
-      - uses: actions/checkout@v4
+      # fetch-depth: 0 是必须的：默认浅克隆只拉最新 1 条提交，后面 pull --rebase
+      # 与按提交历史做判断都会失真。
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v6
         with:
           python-version: '3.12'
 
@@ -33,13 +37,12 @@ jobs:
         id: guard
         run: |
           TODAY=$(date +%F)
-          if git log --oneline -1 --grep="chore: daily publish $TODAY" | grep -q .; then
-            echo "skip=true" >> "$GITHUB_OUTPUT"
-            echo "今天($TODAY)已发布过，跳过（幂等）"
-          else
-            echo "skip=false" >> "$GITHUB_OUTPUT"
-            echo "今天($TODAY)尚未发布，继续"
-          fi
+          # 判定依据是 topics.json 里有没有 publish_date == 今天的文章，
+          # 而不是 git log —— git log 在浅克隆或历史被 rebase 过时会漏判，
+          # 曾导致重复发布（2026-10-08 一天发两篇）。topics.json 是发布行为的唯一真相。
+          ALREADY=$(python -c "import json,sys; ts=json.load(open('topics.json',encoding='utf-8'))['topics']; print('true' if any(t.get('publish_date')==sys.argv[1] for t in ts) else 'false')" "$TODAY")
+          echo "skip=$ALREADY" >> "$GITHUB_OUTPUT"
+          echo "今天($TODAY)已发布=$ALREADY"
 
       - name: 发布下一篇并重建全站
         if: steps.guard.outputs.skip == 'false'
