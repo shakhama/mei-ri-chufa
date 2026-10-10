@@ -5,3 +5,4 @@ output/
 _send_wecom.py
 _send_report_*.py
 _report_content_*.md
+_check_actions.py
