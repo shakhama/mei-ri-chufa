@@ -3,6 +3,11 @@ name: Daily Publish
 # 北京 06:50 触发（UTC 22:50）。GitHub 的 schedule 在整点高峰期常延迟 15~45 分钟，
 # 故不设整点，留 10 分钟余量以保证落在 07:00 附近。
 # 本工作流跑在 GitHub 服务器上，与本机开关机 / WorkBuddy 客户端是否在线完全无关。
+#
+# 2026-10-12 起发布节奏改为「隔日更」（方案 A）：cron 仍每天跑，
+# 但是否真的发布由 generate.py 的 PUBLISH_INTERVAL_DAYS 判定，
+# 不到 2 天就自动跳过。这样不用在 cron 里写「隔日」（GitHub cron 不支持
+# 真正的隔日，'*/2' 是按月内奇数日，月末会连着两天），逻辑也只存在一处。
 on:
   schedule:
     - cron: '50 22 * * *'
@@ -33,16 +38,16 @@ jobs:
         with:
           python-version: '3.12'
 
-      - name: 幂等检查 - 今天是否已发布
+      - name: 幂等检查 - 今天是否到了发布节奏
         id: guard
         run: |
-          TODAY=$(date +%F)
-          # 判定依据是 topics.json 里有没有 publish_date == 今天的文章，
-          # 而不是 git log —— git log 在浅克隆或历史被 rebase 过时会漏判，
-          # 曾导致重复发布（2026-10-08 一天发两篇）。topics.json 是发布行为的唯一真相。
-          ALREADY=$(python -c "import json,sys; ts=json.load(open('topics.json',encoding='utf-8'))['topics']; print('true' if any(t.get('publish_date')==sys.argv[1] for t in ts) else 'false')" "$TODAY")
-          echo "skip=$ALREADY" >> "$GITHUB_OUTPUT"
-          echo "今天($TODAY)已发布=$ALREADY"
+          # 判定直接问 generate.py（PUBLISH_INTERVAL_DAYS + 最近一篇 publish_date），
+          # 不在 workflow 里另写一套 —— 两套逻辑打架曾导致一天发两篇（2026-10-08）
+          # 和与本机重复发同一篇（2026-10-10）。topics.json 是发布行为的唯一真相。
+          DUE=$(python generate.py due)
+          if [ "$DUE" = "yes" ]; then SKIP=false; else SKIP=true; fi
+          echo "skip=$SKIP" >> "$GITHUB_OUTPUT"
+          echo "今天($(date +%F)) 该发=$DUE -> skip=$SKIP"
 
       - name: 发布下一篇并重建全站
         if: steps.guard.outputs.skip == 'false'

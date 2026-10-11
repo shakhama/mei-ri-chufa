@@ -147,21 +147,26 @@ def pull_latest():
     GitHub Actions 的 daily-publish 工作流每天 06:50 会自行 push 一次，
     本机再按旧基线提交就会被 non-fast-forward 拒绝。所以每次开跑先 rebase。
     同样走「直连 → 代理」两路，并用 CRED_FIX 修凭据链（否则会静默卡死）。
+
+    返回 (说明文本, 是否同步成功)。同步失败时调用方必须**放弃本地发布**（fail-safe）：
+    2026-10-10 就是因为拉不到远端、本地 topics.json 落后而误判「还没发」，
+    结果与 Actions 各发一篇同稿，靠事后 reset --hard 才纠正。
+    宁可漏一天，也不能出两篇同日稿。
     """
     proxy = git_proxy()
     prc, pout, perr = run(["git"] + CRED_FIX + ["pull", "--rebase", "origin", "main"],
                           timeout=PUSH_TIMEOUT)
     if prc == 0:
-        return "已同步远端最新提交：%s" % (pout or "(已是最新)")
+        return "已同步远端最新提交：%s" % (pout or "(已是最新)"), True
     attempts = ["直连：%s" % (perr or pout or "超时")]
     if proxy.lower() == "none":
-        return "同步远端失败（已关闭代理重试）：%s" % "；".join(attempts)
+        return "同步远端失败（已关闭代理重试）：%s" % "；".join(attempts), False
     rrc, rout, rerr = git_via_proxy("pull", "--rebase", "origin", "main",
                                     timeout=PUSH_TIMEOUT)
     if rrc == 0:
-        return "直连同步失败，已通过代理 %s 重试成功" % proxy
+        return "直连同步失败，已通过代理 %s 重试成功" % proxy, True
     attempts.append("代理 %s：%s" % (proxy, rerr or rout or "超时"))
-    return "同步远端失败（直连与代理均失败，将按本地基线继续）：%s" % "；".join(attempts)
+    return ("同步远端失败（直连与代理均失败）：%s" % "；".join(attempts), False)
 
 
 def main():
@@ -173,11 +178,16 @@ def main():
     args = ap.parse_args()
 
     # 0. 先同步远端（GitHub Actions 每天早上会自己发一篇并 push）
-    sync0 = pull_latest()
+    sync0, synced = pull_latest()
 
     # 1. 发布下一篇
+    #    发布有两道闸：① 远端必须同步成功（否则本地基线落后会重复发布，2026-10-10 事故）；
+    #    ② generate.py 内部的 PUBLISH_INTERVAL_DAYS 节奏判定（隔日更）。
     if args.no_publish:
         publish = "跳过发布：本日文章已由 GitHub Actions 的 daily-publish 工作流发布（--no-publish）。"
+    elif not synced:
+        publish = ("跳过发布：远端同步失败，本地 topics.json 可能是旧基线，"
+                   "此时发布有重复风险（2026-10-10 事故）。今日不发布，等待 Actions 或下次补跑。")
     else:
         _, out, err = run([PY, GEN, "next"])
         publish = out or err or "(无输出)"

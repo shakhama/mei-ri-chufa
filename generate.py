@@ -37,6 +37,14 @@ OUT = os.path.join(HERE, "output")
 TPL = os.path.join(HERE, "template.html")
 TOPICS = os.path.join(HERE, "topics.json")
 
+# 发布节奏（2026-10-12 起由「日更」改为「隔日更」，方案 A）：
+#   1 = 每日一篇（薄内容，已废弃）
+#   2 = 隔一天一篇，腾出的产能全部用来把单篇做厚到 1200~1800 字 + 配图
+# 判定只看 topics.json 里最近一篇的 publish_date，不看 git 历史
+# （浅克隆 / rebase 会让 git 历史失真，曾导致一天发两篇）。
+# 改这一个常量即可切换节奏，Actions 与本机流水线共用同一份判定。
+PUBLISH_INTERVAL_DAYS = 2
+
 
 def load_topics():
     with open(TOPICS, "r", encoding="utf-8") as f:
@@ -292,11 +300,33 @@ def build_all(data):
     print("  生成: index.html / sitemap.xml / feed.xml / robots.txt")
 
 
+def last_publish_date(data):
+    """最近一篇已发布文章的日期（字符串 ISO），没有则返回 None。"""
+    dates = [t.get("publish_date") for t in data["topics"] if t.get("publish_date")]
+    return max(dates) if dates else None
+
+
 def publish_next(data):
+    """发布下一篇未发布文章；未到发布节奏或已发完则跳过（幂等）。
+
+    幂等判定**只认 topics.json 里最近一篇的 publish_date**：
+    距上一篇不足 PUBLISH_INTERVAL_DAYS 天就不发。
+    Actions（每日 fresh checkout）与本机流水线共用这一处判定，
+    谁先跑到谁发，后跑的自动跳过，不会再出现一天两篇。
+    """
     pending = [t for t in data["topics"] if not t.get("publish_date")]
     if not pending:
         print("所有文章都已发布，没有可发布的了。")
         return False
+
+    last = last_publish_date(data)
+    if last:
+        gap = (datetime.date.today() - datetime.date.fromisoformat(last)).days
+        if gap < PUBLISH_INTERVAL_DAYS:
+            print("跳过发布：距上一篇(%s)仅 %d 天，未到 %d 天一篇的节奏。下一篇：%s"
+                  % (last, gap, PUBLISH_INTERVAL_DAYS, pending[0].get("slug")))
+            return False
+
     t = pending[0]
     t["publish_date"] = today()
     save_topics(data)
@@ -304,13 +334,37 @@ def publish_next(data):
     return True
 
 
+def is_due(data):
+    """今天是否到了该发的日子。输出 yes / no，供 Actions 与人工排查使用。
+
+    与 publish_next 用的是同一套判定（PUBLISH_INTERVAL_DAYS + 最近发布日期），
+    避免出现「guard 说该发、next 说不发」这种两处逻辑打架的情况。
+    """
+    pending = [t for t in data["topics"] if not t.get("publish_date")]
+    if not pending:
+        print("no")
+        return False
+    last = last_publish_date(data)
+    if last:
+        gap = (datetime.date.today() - datetime.date.fromisoformat(last)).days
+        if gap < PUBLISH_INTERVAL_DAYS:
+            print("no")
+            return False
+    print("yes")
+    return True
+
+
 def main():
     ap = argparse.ArgumentParser(description="内容/SEO 资产自动化引擎")
     ap.add_argument("cmd", nargs="?", default="build",
-                    choices=["build", "next", "preview", "reset"])
+                    choices=["build", "next", "preview", "reset", "due"])
     args = ap.parse_args()
 
     data = load_topics()
+
+    if args.cmd == "due":
+        is_due(data)
+        return
 
     if args.cmd == "reset":
         for t in data["topics"]:

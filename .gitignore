@@ -20,3 +20,10 @@ _push_retry.py
 _push.log
 _wecom_send.py
 _wecom_payload.json
+_dump_pending.py
+_pending_dump.txt
+_verify_cadence.py
+_verify_due_yes.py
+_verify_render.py
+_expand_render_cad.py
+_render_preview.html
