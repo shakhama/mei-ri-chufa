@@ -27,6 +27,7 @@
 
 import os
 import sys
+import json
 import argparse
 import subprocess
 import datetime
@@ -44,6 +45,7 @@ os.environ.setdefault("PYTHONIOENCODING", "utf-8")
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 GEN = os.path.join(HERE, "generate.py")
+TOPICS = os.path.join(HERE, "topics.json")
 REPORTS = os.path.join(HERE, "reports")
 PY = sys.executable
 
@@ -184,7 +186,18 @@ def main():
     #    发布有两道闸：① 远端必须同步成功（否则本地基线落后会重复发布，2026-10-10 事故）；
     #    ② generate.py 内部的 PUBLISH_INTERVAL_DAYS 节奏判定（隔日更）。
     if args.no_publish:
-        publish = "跳过发布：本日文章已由 GitHub Actions 的 daily-publish 工作流发布（--no-publish）。"
+        # 区分两种「跳过」，否则日报会谎报「已由 Actions 发布」（2026-10-16 为隔日更休息日，实际无人发文）
+        try:
+            _ts = json.load(open(TOPICS, encoding="utf-8"))["topics"]
+            _done = [t for t in _ts if t.get("publish_date") == today]
+        except Exception:
+            _ts, _done = [], []
+        if _done:
+            publish = ("跳过发布：今日《%s》已由 GitHub Actions 的 daily-publish 工作流发布，"
+                       "本机仅收尾（--no-publish），不重复发文。" % _done[0].get("title", _done[0].get("slug")))
+        else:
+            publish = ("跳过发布：今日非发布日 —— 隔日更节奏下 `generate.py due = no`"
+                       "（距上一篇不足 2 天）。Actions 亦未按计划发文，符合预期，无需补发。")
     elif not synced:
         publish = ("跳过发布：远端同步失败，本地 topics.json 可能是旧基线，"
                    "此时发布有重复风险（2026-10-10 事故）。今日不发布，等待 Actions 或下次补跑。")
