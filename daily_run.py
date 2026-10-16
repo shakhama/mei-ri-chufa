@@ -210,7 +210,22 @@ def main():
     build = out or err or "(无输出)"
 
     # 3. 提交内容变更
-    sync1 = commit_if_changed("chore: daily publish %s" % today)
+    #    提交信息必须**如实反映当天是否真的发文**。
+    #    2026-10-16 教训：隔日更休息日跑 --no-publish，本身没发任何文章，
+    #    却照样提交成「chore: daily publish <日期>」（当时提交里只有 daily_run.py 自身改动）。
+    #    后果：所有按 commit message 判重的脚本（09:30 兜底补发、人工排查）
+    #    都会误判「今天已发布」→ 静默跳过 → 真实漏发被永久掩盖。
+    #    所以这里回读 topics.json：只有真的有 publish_date == today 才用 publish 措辞。
+    def _published_today():
+        try:
+            _ts = json.load(open(TOPICS, encoding="utf-8"))["topics"]
+            return any(t.get("publish_date") == today for t in _ts)
+        except Exception:
+            return False
+
+    commit_msg = ("chore: daily publish %s" % today if _published_today()
+                  else "chore: daily sync %s" % today)
+    sync1 = commit_if_changed(commit_msg)
 
     # 4. 推送（有远端才推）
     push_result = push_if_remote()
