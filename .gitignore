@@ -29,3 +29,7 @@ _verify_render.py
 _expand_render_cad.py
 _render_preview.html
 _check_remote.py
+_weekly_net_check.py
+_weekly_content_stats.py
+_weekly_runs_detail.py
+_weekly_timing.py
