@@ -91,6 +91,15 @@ def commit_if_changed(message):
 # 顺序不可颠倒，否则 helper-selector 仍在链上并继续卡死。
 CRED_FIX = ["-c", "credential.helper=", "-c", "credential.helper=manager"]
 
+# TLS 后端修正（2026-11-02 定位）：
+# 本机 Git for Windows 默认后端 schannel 与 github.com:443 握手会被重置，
+# 表现为直连 push/pull 每次都卡满超时（21s）后报
+# `Failed to connect to github.com:443 after 21055 ms`。
+# 2026-11-01 只在「走代理」时配了 openssl，误以为直连不需要；
+# 实测**直连同样必须带**，加上后直连第 1~3 次即可成功。
+# 修正前：daily_run 内置的两路（直连/代理）会在直连上白白耗掉 PUSH_TIMEOUT。
+SSL_FIX = ["-c", "http.sslBackend=openssl"]
+
 # push 单路最长等待秒数。宁可失败报错，也不要无限挂起。
 PUSH_TIMEOUT = 70
 
@@ -124,7 +133,7 @@ def push_if_remote():
     proxy = git_proxy()
 
     # 1) 直连（修正凭据链后，这是最快也最常见成功的路径）
-    prc, pout, perr = run(["git"] + CRED_FIX + ["push", "origin", "main"],
+    prc, pout, perr = run(["git"] + SSL_FIX + CRED_FIX + ["push", "origin", "main"],
                           timeout=PUSH_TIMEOUT)
     if prc == 0:
         return "已推送到 GitHub：%s" % remote
@@ -156,7 +165,7 @@ def pull_latest():
     宁可漏一天，也不能出两篇同日稿。
     """
     proxy = git_proxy()
-    prc, pout, perr = run(["git"] + CRED_FIX + ["pull", "--rebase", "origin", "main"],
+    prc, pout, perr = run(["git"] + SSL_FIX + CRED_FIX + ["pull", "--rebase", "origin", "main"],
                           timeout=PUSH_TIMEOUT)
     if prc == 0:
         return "已同步远端最新提交：%s" % (pout or "(已是最新)"), True
