@@ -195,15 +195,23 @@ def main():
     #    发布有两道闸：① 远端必须同步成功（否则本地基线落后会重复发布，2026-10-10 事故）；
     #    ② generate.py 内部的 PUBLISH_INTERVAL_DAYS 节奏判定（隔日更）。
     if args.no_publish:
-        # 区分两种「跳过」，否则日报会谎报「已由 Actions 发布」（2026-10-16 为隔日更休息日，实际无人发文）
+        # 区分三种「跳过」，否则日报会谎报：
+        #   2026-10-16 隔日更休息日，实际无人发文却写成「已由 Actions 发布」；
+        #   2026-11-26 选题库存归零（pending=0），due=no 并非「距上一篇不足 2 天」，
+        #   照旧措辞会把 P0 断档掩盖成正常休息日。
         try:
             _ts = json.load(open(TOPICS, encoding="utf-8"))["topics"]
             _done = [t for t in _ts if t.get("publish_date") == today]
+            _pending = [t for t in _ts if not t.get("publish_date")]
         except Exception:
-            _ts, _done = [], []
+            _ts, _done, _pending = [], [], []
         if _done:
             publish = ("跳过发布：今日《%s》已由 GitHub Actions 的 daily-publish 工作流发布，"
                        "本机仅收尾（--no-publish），不重复发文。" % _done[0].get("title", _done[0].get("slug")))
+        elif not _pending:
+            publish = ("跳过发布：🔴 选题库存已归零（topics.json 待发 0 篇），"
+                       "`generate.py due = no` 是因无文可发，并非隔日更休息日。"
+                       "流水线无法产出新文章，需尽快补充 topics.json 才能恢复发文。")
         else:
             publish = ("跳过发布：今日非发布日 —— 隔日更节奏下 `generate.py due = no`"
                        "（距上一篇不足 2 天）。Actions 亦未按计划发文，符合预期，无需补发。")
